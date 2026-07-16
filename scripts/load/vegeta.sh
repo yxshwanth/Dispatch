@@ -64,7 +64,12 @@ curl -sS http://localhost:9091/metrics 2>/dev/null | grep -E '^dispatch_delivery
 echo ""
 echo "==> wait for deliveries to settle, then completeness"
 sleep 15
-docker compose exec -T postgres psql -U dispatch -d dispatch < scripts/load/completeness.sql || true
+# Match Makefile: prefer system Docker socket when Desktop socket is unavailable.
+export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+if ! docker compose exec -T postgres psql -U dispatch -d dispatch < scripts/load/completeness.sql; then
+  echo "ERROR: completeness SQL failed (is Compose postgres up? DOCKER_HOST=$DOCKER_HOST)" >&2
+  exit 1
+fi
 
 echo ""
 echo "Lag note: dispatch_consumer_lag above should stay near 0 under this load;"

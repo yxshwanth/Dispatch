@@ -4,5 +4,6 @@ datasources:
     type: prometheus
     access: proxy
     url: http://prometheus:9090
+    uid: dispatch-prometheus
     isDefault: true
     editable: false

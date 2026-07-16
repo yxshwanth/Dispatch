@@ -2,7 +2,7 @@
 
 Granular description of how the running application is structured and how
 data moves through it. Design *why* lives in [project_overview.md](project_overview.md);
-status in [halfway_summary.md](halfway_summary.md); build order in
+status in [summary.md](summary.md); build order in
 [roadmap.md](roadmap.md).
 
 **Module:** `github.com/yash/dispatch`  
@@ -337,15 +337,17 @@ Codecs: `internal/kafka/messages.go` (`EncodeEvent` / `DecodeEvent` /
 `delivery.Deliverer.Deliver(ctx, sub, eventID, payload)`:
 
 1. `circuitbreaker.AllowDelivery` — may **skip** (no HTTP, no attempt row on skip)
-2. Sign with **current** secret: `hmacsign.Sign(secret, ts, payload)`
-3. POST to `sub.URL` with timeout `DELIVERY_TIMEOUT` (default 10s)
-4. Headers:
+2. If half-open: `store.ClaimProbe` — conditional `UPDATE` so **only one** concurrent
+   delivery claims the probe (advances `state_changed_at`); losers skip
+3. Sign with **current** secret: `hmacsign.Sign(secret, ts, payload)`
+4. POST to `sub.URL` with timeout `DELIVERY_TIMEOUT` (default 10s)
+5. Headers:
    - `Content-Type: application/json`
    - `X-Dispatch-Signature`
    - `X-Dispatch-Timestamp` (Unix seconds)
    - `X-Dispatch-Event-ID`
-5. Success = HTTP 2xx → `InsertDeliveryAttempt` + `RecordSuccess`
-6. Failure → attempt row + `RecordFailure`
+6. Success = HTTP 2xx → `InsertDeliveryAttempt` + `RecordSuccess`
+7. Failure → attempt row + `RecordFailure`
 
 Body is discarded after ≤1 KiB read.
 
@@ -401,8 +403,10 @@ Defaults: 5 consecutive failures → degraded; 60s cooldown; 20 DLQ entries → 
 | * → paused | `dlq_count ≥ CB_DLQ_PAUSE_THRESHOLD` | `dlq_threshold` |
 | * → active | manual activate | `manual_activate` |
 
-Concurrency: transitions use conditional `UPDATE ... WHERE state = ...`
-so only one winner records the audit row under races.
+Concurrency: CB state transitions use conditional `UPDATE ... WHERE state = ...`
+so only one winner records the audit row under races. Half-open admission is
+likewise single-flight via `store.ClaimProbe` (advances `state_changed_at` so
+peers skip until the probe succeeds or fails).
 
 **No active health pings.** Half-open uses a real signed event only.
 
@@ -589,5 +593,7 @@ is optional for demos.
 - Phase 4 observability is shipped: Prometheus `:9090`, Grafana dashboard under
   `deploy/observability/`, OTel → Jaeger (OTLP HTTP), vegeta load script under
   `scripts/load/`
+- Compose benchmark numbers (ingest vs delivery) are maintained in
+  [`README.md`](../README.md) / [`summary.md`](summary.md) — not duplicated here
 - Live MSK IAM client signer wiring in Go — Terraform ready; local uses plaintext Redpanda
 - Product auth beyond API keys — intentional non-goal

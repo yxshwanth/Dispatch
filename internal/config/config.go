@@ -36,10 +36,13 @@ type Config struct {
 	RecoveryInterval time.Duration
 	RecoveryAge      time.Duration
 
-	MetricsAddr   string
-	OTELEndpoint  string
-	OTELService   string
+	MetricsAddr    string
+	OTELEndpoint   string
+	OTELService    string
 	TracingEnabled bool
+
+	GRPCAddr           string
+	GRPCInternalToken  string
 }
 
 func Load() Config {
@@ -76,6 +79,9 @@ func Load() Config {
 		OTELEndpoint:   getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318"),
 		OTELService:    getenv("OTEL_SERVICE_NAME", "dispatch"),
 		TracingEnabled: getenv("OTEL_TRACING_ENABLED", "true") == "true",
+
+		GRPCAddr:          getenv("GRPC_ADDR", ":9000"),
+		GRPCInternalToken: getenv("GRPC_INTERNAL_TOKEN", "dev-secret"),
 	}
 }
 

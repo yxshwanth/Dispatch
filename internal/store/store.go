@@ -58,6 +58,17 @@ func (s *Store) TenantByAPIKeyHash(ctx context.Context, hash string) (Tenant, er
 	return t, err
 }
 
+func (s *Store) GetTenant(ctx context.Context, id uuid.UUID) (Tenant, error) {
+	var t Tenant
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, created_at FROM tenants WHERE id = $1
+	`, id).Scan(&t.ID, &t.Name, &t.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Tenant{}, ErrNotFound
+	}
+	return t, err
+}
+
 type Subscription struct {
 	ID                       uuid.UUID  `json:"id"`
 	TenantID                 uuid.UUID  `json:"tenant_id"`
@@ -375,6 +386,25 @@ func (s *Store) ListDeliveries(ctx context.Context, tenantID, subID uuid.UUID, c
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ClaimProbe atomically claims the single half-open probe slot for a degraded
+// subscription whose cooldown has elapsed. Exactly one concurrent caller gets
+// claimed=true: state_changed_at is advanced to now so peers see the circuit as
+// still cooling down until this probe finishes (success → active, or failure
+// restarts cooldown via RecordFailure).
+func (s *Store) ClaimProbe(ctx context.Context, subID uuid.UUID, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE subscriptions
+		SET state_changed_at = $1
+		WHERE id = $2
+		  AND state = 'degraded'
+		  AND state_changed_at <= $3
+	`, now, subID, now.Add(-cooldown))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // RecordSuccess resets failures and may transition degraded→active on half-open probe.

@@ -72,6 +72,24 @@ func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID
 		span.SetAttributes(attribute.Bool("skipped", true))
 		return Result{Skipped: true}
 	}
+	if halfOpen {
+		claimed, err := d.store.ClaimProbe(ctx, sub.ID, now, d.cb.Cooldown)
+		if err != nil {
+			d.log.Error("claim half-open probe failed", "err", err, "event_id", eventID, "subscription_id", sub.ID)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return Result{Err: err, HalfOpen: true}
+		}
+		if !claimed {
+			d.log.Info("delivery skipped; half-open probe already claimed",
+				"event_id", eventID,
+				"subscription_id", sub.ID,
+			)
+			metrics.ObserveDelivery("skipped", 0)
+			span.SetAttributes(attribute.Bool("skipped", true), attribute.Bool("half_open_lost_race", true))
+			return Result{Skipped: true}
+		}
+	}
 
 	ts := now
 	sig := hmacsign.Sign(sub.Secret, ts, payload)

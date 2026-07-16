@@ -1,6 +1,7 @@
 -- Completeness check after a load run.
--- events should be accounted for by delivery_attempts and/or dead_letters
--- (plus in-flight Kafka). A large silent gap is a bug.
+-- Counts are volume-wide (Compose Postgres persists across sessions), not scoped
+-- to this vegeta batch — the invariant is "nothing aged is orphaned," not
+-- "events == this run's request count."
 
 \echo '=== event vs attempt/dlq completeness ==='
 

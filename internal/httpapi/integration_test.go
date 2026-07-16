@@ -23,6 +23,7 @@ import (
 	"github.com/yash/dispatch/internal/delivery"
 	"github.com/yash/dispatch/internal/httpapi"
 	"github.com/yash/dispatch/internal/idempotency"
+	"github.com/yash/dispatch/internal/ingest"
 	"github.com/yash/dispatch/internal/kafka"
 	"github.com/yash/dispatch/internal/ratelimit"
 	"github.com/yash/dispatch/internal/store"
@@ -66,7 +67,8 @@ func TestIntegrationDeliveryAndCircuitBreaker(t *testing.T) {
 		DLQPauseThreshold: cfg.CBDLQPauseThreshold,
 	}
 	deliv := delivery.New(st, cfg.DeliveryTimeout, cbCfg, log)
-	api := httpapi.New(cfg, st, limiter, idem, deliv, prod, log)
+	ingestSvc := ingest.New(st, idem, prod, log)
+	api := httpapi.New(cfg, st, limiter, ingestSvc, deliv, prod, log)
 
 	worker := kafka.NewWorker(cfg, st, deliv, prod, log)
 	go func() { _ = worker.Run(ctx) }()

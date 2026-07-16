@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package dispatch.v1;
+
+option go_package = "github.com/yash/dispatch/internal/genproto/dispatchv1";
+
+// IngestionService is the internal gRPC ingest path (one unary RPC).
+// REST and gRPC share internal/ingest.Service.
+service IngestionService {
+  rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
+}
+
+message IngestEventRequest {
+  string tenant_id = 1;
+  string event_type = 2;
+  bytes payload = 3;          // raw JSON payload (same as REST body's payload field)
+  string idempotency_key = 4; // optional
+}
+
+message IngestEventResponse {
+  string event_id = 1;
+  bool replayed = 2;
+}

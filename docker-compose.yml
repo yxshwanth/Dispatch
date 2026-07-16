@@ -79,6 +79,8 @@ services:
       KAFKA_BROKERS: redpanda:9092
       API_ADDR: ":8080"
       METRICS_ADDR: ":9090"
+      GRPC_ADDR: ":9000"
+      GRPC_INTERNAL_TOKEN: "dev-secret"
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
       OTEL_SERVICE_NAME: dispatch
       OTEL_TRACING_ENABLED: "true"
@@ -86,6 +88,7 @@ services:
     ports:
       - "8080:8080"
       - "9090:9090"
+      - "9000:9000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,7 +121,9 @@ services:
         condition: service_started
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
     volumes:
       - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -136,7 +141,6 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:

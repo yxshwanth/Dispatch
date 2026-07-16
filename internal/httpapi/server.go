@@ -15,9 +15,8 @@ import (
 	"github.com/yash/dispatch/internal/auth"
 	"github.com/yash/dispatch/internal/config"
 	"github.com/yash/dispatch/internal/delivery"
-	"github.com/yash/dispatch/internal/idempotency"
+	"github.com/yash/dispatch/internal/ingest"
 	kafkapkg "github.com/yash/dispatch/internal/kafka"
-	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/ratelimit"
 	"github.com/yash/dispatch/internal/store"
 	"go.opentelemetry.io/otel"
@@ -29,7 +28,7 @@ type Server struct {
 	cfg    config.Config
 	store  *store.Store
 	limit  *ratelimit.Limiter
-	idem   *idempotency.Store
+	ingest *ingest.Service
 	deliv  *delivery.Deliverer
 	prod   *kafkapkg.Producer
 	log    *slog.Logger
@@ -37,12 +36,12 @@ type Server struct {
 	tracer trace.Tracer
 }
 
-func New(cfg config.Config, st *store.Store, limit *ratelimit.Limiter, idem *idempotency.Store, deliv *delivery.Deliverer, prod *kafkapkg.Producer, log *slog.Logger) *Server {
+func New(cfg config.Config, st *store.Store, limit *ratelimit.Limiter, ingestSvc *ingest.Service, deliv *delivery.Deliverer, prod *kafkapkg.Producer, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	s := &Server{
-		cfg: cfg, store: st, limit: limit, idem: idem, deliv: deliv, prod: prod, log: log,
+		cfg: cfg, store: st, limit: limit, ingest: ingestSvc, deliv: deliv, prod: prod, log: log,
 		mux: http.NewServeMux(), tracer: otel.Tracer("dispatch/httpapi"),
 	}
 	s.routes()
@@ -408,73 +407,31 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if envelope.EventType == "" {
-		writeError(w, http.StatusBadRequest, "event_type is required")
-		return
-	}
 	payload := envelope.Payload
 	if payload == nil {
 		payload = raw
 	}
-	if !json.Valid(payload) {
-		writeError(w, http.StatusBadRequest, "invalid payload JSON")
-		return
-	}
 
-	idemKeyHdr := r.Header.Get("Idempotency-Key")
-	var idemKey *string
-	eventID := uuid.New()
-
-	if idemKeyHdr != "" {
-		idemKey = &idemKeyHdr
-		existingID, exists, err := s.idem.Reserve(r.Context(), tenant.ID.String(), idemKeyHdr, eventID.String())
-		if err == nil && exists && existingID != "" {
-			writeJSON(w, http.StatusOK, map[string]any{"id": existingID, "idempotent_replay": true})
-			return
-		}
-		// Redis error: fall through; Postgres unique index is the safety net.
-	}
-
-	ev, err := s.store.CreateEvent(r.Context(), eventID, tenant.ID, envelope.EventType, payload, idemKey)
+	res, err := s.ingest.CreateEvent(r.Context(), tenant.ID, envelope.EventType, payload, r.Header.Get("Idempotency-Key"))
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) && idemKey != nil {
-			existing, err2 := s.store.EventByIdempotencyKey(r.Context(), tenant.ID, *idemKey)
-			if err2 == nil {
-				_ = s.idem.Set(r.Context(), tenant.ID.String(), *idemKey, existing.ID.String())
-				writeJSON(w, http.StatusOK, map[string]any{"id": existing.ID, "idempotent_replay": true})
-				return
-			}
+		if errors.Is(err, ingest.ErrInvalid) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		s.log.Error("create event failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-
-	log := s.log.With("event_id", ev.ID, "tenant_id", tenant.ID)
-	log.Info("event ingested")
-	span.SetAttributes(attribute.String("event_id", ev.ID.String()))
-	metrics.EventsIngested.Inc()
-
-	if s.prod == nil {
-		writeError(w, http.StatusInternalServerError, "kafka producer not configured")
+	span.SetAttributes(attribute.String("event_id", res.Event.ID.String()))
+	if res.Replayed {
+		writeJSON(w, http.StatusOK, map[string]any{"id": res.Event.ID, "idempotent_replay": true})
 		return
 	}
-	if err := s.prod.ProduceIngest(r.Context(), kafkapkg.EventMessage{
-		EventID:   ev.ID,
-		TenantID:  tenant.ID,
-		EventType: ev.EventType,
-		Payload:   payload,
-	}); err != nil {
-		log.Error("kafka produce failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to enqueue event")
-		return
-	}
-
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"id":         ev.ID,
-		"event_type": ev.EventType,
+		"id":         res.Event.ID,
+		"event_type": res.Event.EventType,
 		"status":     "accepted",
-		"created_at": ev.CreatedAt,
+		"created_at": res.Event.CreatedAt,
 	})
 }
 

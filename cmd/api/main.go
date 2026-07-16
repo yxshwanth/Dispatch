@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,8 +16,10 @@ import (
 	"github.com/yash/dispatch/internal/circuitbreaker"
 	"github.com/yash/dispatch/internal/config"
 	"github.com/yash/dispatch/internal/delivery"
+	"github.com/yash/dispatch/internal/grpcapi"
 	"github.com/yash/dispatch/internal/httpapi"
 	"github.com/yash/dispatch/internal/idempotency"
+	"github.com/yash/dispatch/internal/ingest"
 	"github.com/yash/dispatch/internal/kafka"
 	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/ratelimit"
@@ -64,13 +67,14 @@ func main() {
 	st := store.New(pool)
 	limiter := ratelimit.New(rdb, cfg.RateLimitPerMinute, cfg.RateLimitWindow, log)
 	idem := idempotency.New(rdb, cfg.IdempotencyTTL)
+	ingestSvc := ingest.New(st, idem, prod, log)
 	cbCfg := circuitbreaker.Config{
 		FailureThreshold:  cfg.CBFailureThreshold,
 		Cooldown:          cfg.CBCooldown,
 		DLQPauseThreshold: cfg.CBDLQPauseThreshold,
 	}
 	deliv := delivery.New(st, cfg.DeliveryTimeout, cbCfg, log)
-	api := httpapi.New(cfg, st, limiter, idem, deliv, prod, log)
+	api := httpapi.New(cfg, st, limiter, ingestSvc, deliv, prod, log)
 
 	metrics.ListenAndServe(ctx, cfg.MetricsAddr, log)
 	go metrics.RefreshCircuitBreakerGauges(ctx, st, 15*time.Second, log)
@@ -85,10 +89,24 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 	}
 
+	grpcSrv := grpcapi.NewGRPCServer(cfg.GRPCInternalToken, grpcapi.NewServer(ingestSvc, st, log))
+	lis, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		log.Error("grpc listen failed", "err", err, "addr", cfg.GRPCAddr)
+		os.Exit(1)
+	}
+
 	go func() {
 		log.Info("api listening", "addr", cfg.APIAddr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
+			os.Exit(1)
+		}
+	}()
+	go func() {
+		log.Info("grpc listening", "addr", cfg.GRPCAddr)
+		if err := grpcSrv.Serve(lis); err != nil {
+			log.Error("grpc serve error", "err", err)
 			os.Exit(1)
 		}
 	}()
@@ -97,6 +115,7 @@ func main() {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	grpcSrv.GracefulStop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown error", "err", err)
 		os.Exit(1)

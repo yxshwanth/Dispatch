@@ -14,9 +14,11 @@ import (
 
 var (
 	DeliveryDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "dispatch_delivery_duration_seconds",
-		Help:    "Outbound webhook delivery latency",
-		Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		Name: "dispatch_delivery_duration_seconds",
+		Help: "Outbound webhook delivery latency",
+		Buckets: []float64{
+			0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+		},
 	}, []string{"status"})
 
 	DeliveryTotal = promauto.NewCounterVec(prometheus.CounterOpts{

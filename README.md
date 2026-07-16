@@ -1,196 +1,112 @@
 # Dispatch
 
-Multi-tenant webhook delivery platform. Producers ingest events over HTTP;
-Dispatch fans them out to subscriber endpoints with HMAC signing, retries,
-circuit breaking, dead-letter replay, and full local observability.
+![CI](https://github.com/yxshwanth/Dispatch/actions/workflows/ci.yml/badge.svg)
 
-```text
-Producer ──POST /v1/events──► API ──produce──► Kafka (ingest)
-                               │                    │
-                               ▼                    ▼
-                          Postgres              Consumer
-                          Redis                   │
-                                                  ├── HMAC POST ──► Subscriber
-                                                  ├── fail ──► Kafka (retry)
-                                                  └── exhausted ──► dead_letters
+A multi-tenant webhook delivery platform — the kind of internal system Stripe,
+GitHub, and Twilio build or buy. Producers POST events; Dispatch fans them out
+to subscriber endpoints with HMAC signing, retries, circuit breaking, dead-letter
+replay, and a full local observability stack.
 
-api:9090 / consumer:9090 ──► Prometheus ──► Grafana
-API + consumer spans ──────► Jaeger (OTLP)
+```mermaid
+flowchart TB
+  Producer[Producer] -->|Bearer API key| API[cmd/api]
+  API --> PG[(Postgres)]
+  API --> Redis[(Redis)]
+  API -->|key=tenant_id| Ingest[dispatch.ingest]
+  Ingest --> Consumer[cmd/consumer]
+  Consumer -->|HMAC POST| Endpoint[Subscriber]
+  Consumer -->|failure| Retry[dispatch.retry]
+  Retry --> Consumer
+  Consumer -->|exhausted| DLQ[(dead_letters)]
+  API -->|replay| Ingest
+  API --> Prom[Prometheus]
+  Consumer --> Prom
+  Prom --> Graf[Grafana]
+  API --> Jaeger[Jaeger OTLP]
+  Consumer --> Jaeger
 ```
 
-**Stack:** Go · Postgres 16 · Redis 7 · Kafka (Redpanda locally / MSK in Terraform) · franz-go · Prometheus · Grafana · OpenTelemetry / Jaeger
-
----
-
-## Features
-
-- **Multi-tenant ingest** — API-key auth; events filtered to matching subscriptions by `event_type`
-- **Reliable delivery** — exponential backoff (`10s → 30s → 1m → 5m → 15m`), then Postgres DLQ with replay
-- **HMAC-SHA256 signing** — Stripe/GitHub-style `timestamp.payload` signatures; secret rotation with a grace window
-- **Circuit breaker** — `active → degraded → paused`; half-open probe with real events after cooldown (no synthetic health pings)
-- **Rate limiting & idempotency** — Redis sliding window per tenant; optional `Idempotency-Key`
-- **Ordering** — Kafka partition key = `tenant_id` (per-tenant order). Failed deliveries do **not** block later events for the same subscription
-- **Observability** — Prometheus metrics on `:9090`, provisioned Grafana dashboard, OTel traces across ingest → Kafka → delivery (Jaeger)
-
----
-
-## Quick start
-
-Requires Docker, Go 1.22+, and Make.
-
-```bash
-make up              # Postgres, Redis, Redpanda, api, consumer, webhook, Prometheus, Grafana, Jaeger
-                     # runs migrations + creates Kafka topics
-
-# Optional host iterate (infra still from Compose):
-make run-api         # :8080 / metrics :9090
-make run-consumer    # metrics :9091
-```
-
-| Service | URL |
-| ------- | --- |
-| API | http://localhost:8080 |
-| Grafana | http://localhost:3000 (admin/admin; anonymous viewer on) |
-| Prometheus | http://localhost:9092 |
-| Jaeger UI | http://localhost:16686 |
-| Webhook echo | http://localhost:8081 |
-
-### Walkthrough
-
-**1. Create a tenant** (API key returned once):
-
-```bash
-curl -sS -X POST http://localhost:8080/v1/tenants \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"acme"}' | jq .
-# → { "id": "...", "api_key": "..." }
-```
-
-**2. Create a subscription** (HMAC secret returned once):
-
-```bash
-export API_KEY=...   # from step 1
-
-curl -sS -X POST http://localhost:8080/v1/subscriptions \
-  -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "url": "http://webhook:8080/",
-    "event_types": ["order.created"]
-  }' | jq .
-```
-
-Use `http://webhook:8080/` when the consumer runs in Compose (service DNS). From a host-run consumer, point at `http://localhost:8081/`.
-
-**3. Ingest an event** (`202 Accepted` after Kafka produce):
-
-```bash
-curl -sS -X POST http://localhost:8080/v1/events \
-  -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: demo-1' \
-  -d '{
-    "event_type": "order.created",
-    "payload": {"order_id": "ord_123", "total": 4200}
-  }' | jq .
-```
-
-**4. Inspect deliveries / DLQ / traces:**
-
-```bash
-curl -sS "http://localhost:8080/v1/subscriptions/$SUB_ID/deliveries" \
-  -H "Authorization: Bearer $API_KEY" | jq .
-
-curl -sS "http://localhost:8080/v1/dead-letters?subscription_id=$SUB_ID" \
-  -H "Authorization: Bearer $API_KEY" | jq .
-```
-
-Open Jaeger and search by tag `event_id`. Grafana dashboard **Dispatch Delivery** is provisioned under folder Dispatch.
-
-Subscriber endpoints receive:
-
-| Header | Purpose |
-| ------ | ------- |
-| `X-Dispatch-Signature` | Hex HMAC-SHA256 over `{unix}.{raw_body}` |
-| `X-Dispatch-Timestamp` | Unix seconds used in the signature |
-| `X-Dispatch-Event-ID` | Correlation ID |
-
-**Replay window:** receivers should reject signatures whose timestamp is older than **5 minutes** (or more than 5 minutes in the future). Helper: `hmacsign.VerifyFresh` / `DefaultReplayWindow`. This is documented as a consumer-side check; Dispatch signs with the current time at delivery.
+**Stack:** Go · Postgres 16 · Redis 7 · Kafka (Redpanda / MSK) · franz-go · Prometheus · Grafana · OpenTelemetry / Jaeger · optional gRPC ingest
 
 ---
 
 ## Benchmarks (Compose)
 
-Measured on the local Docker Compose stack (`make up` + `make load` / `scripts/load/vegeta.sh`), targeting the in-compose `webhook` echo receiver. Numbers are laptop/Compose figures, not cloud SLOs.
+Measured **2026-07-16** on local Docker Compose (`RATE=50/s DURATION=15s`
+`./scripts/load/vegeta.sh` → in-compose `webhook`). Laptop figures, not cloud SLOs.
+**Ingest latency ≠ delivery latency.**
 
-| Metric | Result |
-| ------ | ------ |
-| Ingest rate | **100 events/sec** sustained for 20s (2000 requests) |
-| Ingest success | **100%** `202 Accepted` |
-| Ingest HTTP latency | p50 **1.2 ms**, p95 **1.6 ms**, p99 **~2.0 ms** (vegeta) |
-| Delivery duration (Prometheus histogram) | p50 **~5 ms**, p95/p99 **~10 ms** bucket (mean **~1.6 ms** from `_sum/_count`) |
-| Consumer lag | stayed **~0** under this load (ingest partitions = 3) |
-| Completeness | successful attempts tracked events with matching subscriptions; no pending DLQ after settle |
+**Ingest** (vegeta → `POST /v1/events` → `202`):
 
-Re-run:
+| | |
+|--|--|
+| Throughput | **50.1 events/sec** for ~15s (**750** requests), **100%** `202` |
+| HTTP latency | p50 **1.30 ms** · p95 **1.75 ms** · p99 **2.09 ms** · max **17.1 ms** |
+
+**Delivery** (consumer → subscriber HTTP), from
+`dispatch_delivery_duration_seconds{status="success"}` on this same run
+(fine buckets 1 ms … 10 s; n=750; mean from `_sum/_count`):
+
+| | |
+|--|--|
+| Mean | **1.62 ms** |
+| p50 / p95 / p99 | **~1.7 ms** / **~2.4 ms** / **~2.5 ms** (from cumulative buckets) |
+| Mass | **99.7%** of successes ≤ **2.5 ms**; all ≤ **5 ms** |
+| Consumer lag | **0** after settle |
+
+Completeness SQL: no events older than 30s missing attempts for this run’s
+matching subscriptions (`scripts/load/completeness.sql`).
+
+Grafana: http://localhost:3000/d/dispatch-delivery/dispatch-delivery
+
+Harder ingest smoke (optional): `RATE=100/s DURATION=20s ./scripts/load/vegeta.sh`
+(earlier run hit 100/s with 100% `202` and ingest p99 ~2 ms; re-measure delivery
+after that load if you want matching histogram n).
+
+---
+
+## Quick start
+
+Requires Docker, Go 1.22+, Make.
 
 ```bash
-make load
-# or: RATE=100/s DURATION=20s ./scripts/load/vegeta.sh
+make up                 # data plane + api + consumer + webhook + Prometheus/Grafana/Jaeger
+                        # migrations + Kafka topics included
+
+# optional host iterate against Compose infra:
+make run-api            # :8080 HTTP, :9000 gRPC, :9090 metrics
+make run-consumer       # :9091 metrics
 ```
 
-Completeness SQL: `scripts/load/completeness.sql`.
+| Service | URL |
+| ------- | --- |
+| API | http://localhost:8080 |
+| gRPC ingest | localhost:9000 (`GRPC_INTERNAL_TOKEN`, default `dev-secret`) |
+| Grafana | http://localhost:3000 (admin/admin; anonymous viewer on) |
+| Prometheus | http://localhost:9092 |
+| Jaeger | http://localhost:16686 |
 
----
+```bash
+# 1) tenant (api_key returned once)
+curl -sS -X POST http://localhost:8080/v1/tenants \
+  -H 'Content-Type: application/json' -d '{"name":"acme"}' | jq .
 
-## Architecture
+# 2) subscription (use http://webhook:8080/ when consumer is in Compose)
+curl -sS -X POST http://localhost:8080/v1/subscriptions \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"url":"http://webhook:8080/","event_types":["order.created"]}' | jq .
 
-Two binaries share domain packages:
-
-| Binary | Role |
-| ------ | ---- |
-| `cmd/api` | REST surface, persist events, produce to Kafka, DLQ replay, recovery sweep, metrics + traces |
-| `cmd/consumer` | Ingest + retry consumer groups, HMAC delivery, enqueue retries / DLQ, lag gauges |
-
-```mermaid
-flowchart TB
-  Client[HTTP client] --> API[cmd/api]
-  API --> PG[(Postgres)]
-  API --> Redis[(Redis)]
-  API -->|key=tenant_id| Ingest[dispatch.ingest]
-  Ingest --> Worker[cmd/consumer]
-  Worker -->|HMAC POST| Endpoint[Subscriber]
-  Worker -->|failure| Retry[dispatch.retry]
-  Retry --> Worker
-  Worker -->|exhausted| DLQ[(dead_letters)]
-  API -->|replay| Ingest
-  API --> Prom[Prometheus]
-  Worker --> Prom
-  Prom --> Graf[Grafana]
-  API --> Jaeger
-  Worker --> Jaeger
+# 3) event → 202 Accepted
+curl -sS -X POST http://localhost:8080/v1/events \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"event_type":"order.created","payload":{"order_id":"ord_123"}}' | jq .
 ```
 
-Deep dive: [`docs/architecture.md`](docs/architecture.md).
+Load test: `make load` (default 50/s) or `RATE=100/s DURATION=20s ./scripts/load/vegeta.sh`.
 
 ---
 
-## Design decisions
-
-| Decision | Choice | Why |
-| -------- | ------ | --- |
-| Ordering under failure | Best-effort; failed deliveries don’t block the stream | One dead endpoint must not stall a tenant’s entire event flow |
-| Circuit breaker | Half-open probe with the next real signed event | Synthetic GETs 404 on most webhook receivers; fake POSTs are rude |
-| DLQ | Postgres table + partial index on `replayed_at IS NULL` | Replay needs filter, pagination, and mark-as-replayed — not a Kafka topic |
-| Retry scheduling | Single retry topic; consumer sleeps until `retry_after` | Avoids tiered delay topics; acceptable with one retry partition |
-| Auth | SHA-256 hashed API keys | Enough for multi-tenant isolation; not an auth product demo |
-| Kafka client | `twmb/franz-go` | Clean consumer groups + MSK IAM path later |
-| Metrics cardinality | No `tenant_id` on ingest counter; CB gauge by `state` counts | Avoids Prometheus label explosion |
-| Tracing | W3C `traceparent` on Kafka headers | Kafka has no native W3C propagation |
-
----
-
-## HTTP API
+## HTTP API (essentials)
 
 Auth: `Authorization: Bearer <api_key>` (except tenant create and health).
 
@@ -198,85 +114,50 @@ Auth: `Authorization: Bearer <api_key>` (except tenant create and health).
 | ------ | ---- | ----- |
 | `POST` | `/v1/tenants` | Returns plaintext `api_key` once |
 | `POST` | `/v1/subscriptions` | Returns HMAC `secret` once |
-| `GET` | `/v1/subscriptions` | Cursor pagination |
-| `GET` | `/v1/subscriptions/{id}` | |
-| `DELETE` | `/v1/subscriptions/{id}` | |
-| `POST` | `/v1/subscriptions/{id}/rotate-secret` | Dual-secret grace window |
-| `POST` | `/v1/subscriptions/{id}/activate` | Un-pause circuit breaker |
+| `POST` | `/v1/events` | `202` accepted; `200` idempotent replay; `413` / `415` |
 | `GET` | `/v1/subscriptions/{id}/deliveries` | Attempt log |
-| `POST` | `/v1/events` | `202` accepted; `200` idempotent replay; `413` oversized; `415` bad Content-Type |
-| `GET` | `/v1/dead-letters?subscription_id=` | Pending only |
-| `POST` | `/v1/dead-letters/{id}/replay` | `202` / `409` if already replayed |
-| `GET` | `/healthz`, `/readyz` | Liveness / Postgres readiness |
+| `GET` | `/v1/dead-letters?subscription_id=` | Pending DLQ |
+| `POST` | `/v1/dead-letters/{id}/replay` | Re-produce to ingest |
+| `GET` | `/healthz`, `/readyz` | Liveness / readiness |
 
-Full route table and pipelines: [`docs/architecture.md`](docs/architecture.md) §4–5.
+Full table: [`docs/architecture.md`](docs/architecture.md).
 
----
-
-## Configuration
-
-Loaded from the environment (defaults in `internal/config`):
-
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `DATABASE_URL` | local Postgres | Primary store |
-| `REDIS_ADDR` | `localhost:6379` | Rate limit + idempotency |
-| `KAFKA_BROKERS` | `localhost:19092` | Redpanda external listener |
-| `API_ADDR` | `:8080` | HTTP listen |
-| `METRICS_ADDR` | `:9090` | Prometheus scrape |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4318` | Jaeger OTLP HTTP |
-| `OTEL_TRACING_ENABLED` | `true` | Toggle tracing |
-| `MAX_PAYLOAD_BYTES` | `262144` | Request body cap (`413`) |
-| `DELIVERY_TIMEOUT` | `10s` | Outbound HTTP timeout |
-| `RATE_LIMIT_PER_MINUTE` | `60` | Per-tenant sliding window (Compose api uses a high value for demos) |
-| `CB_FAILURE_THRESHOLD` | `5` | Failures before `degraded` |
-| `CB_COOLDOWN` | `60s` | Half-open probe wait |
-| `CB_DLQ_PAUSE_THRESHOLD` | `20` | DLQ count before `paused` |
-| `RETRY_BACKOFF` | `10s,30s,1m,5m,15m` | Retry schedule |
-| `CONSUMER_MODE` | `all` | `all` \| `ingest` \| `retry` |
-
----
-
-## Development
+**Internal gRPC** (same ingest path as REST): `dispatch.v1.IngestionService/IngestEvent`
+on `:9000`, auth via metadata `x-internal-token` (static token — deliberate
+simplification; production internal gRPC would use mTLS/SPIFFE).
 
 ```bash
-make test                 # unit tests (testify), including HMAC freshness + 413/415
-make test-integration     # needs Compose up; DISPATCH_INTEGRATION=1
-make load                 # vegeta ingest + completeness SQL
-make down                 # tear down Compose
+# payload is base64 for bytes fields in grpcurl JSON
+grpcurl -plaintext -H "x-internal-token: dev-secret" \
+  -d '{"tenant_id":"…","event_type":"order.created","payload":"eyJ4IjoxfQ=="}' \
+  localhost:9000 dispatch.v1.IngestionService/IngestEvent
 ```
 
-CI (`.github/workflows/ci.yml`) brings up Compose, migrates, creates topics, and runs `go test ./... -race`.
+---
+
+## Design decisions
+
+| Decision | Choice | Why |
+| -------- | ------ | --- |
+| Ordering under failure | Don’t block the stream | One dead URL must not stall a tenant (Stripe/GitHub tradeoff) |
+| Half-open CB | Real signed event + **`ClaimProbe` single-flight** | Synthetic GETs are useless; concurrent probes would stampede — we fixed that race with a conditional `UPDATE` before the POST |
+| DLQ | Postgres | Replay needs filter, pagination, `replayed_at` |
+| Retries | One retry topic + `retry_after` | Avoids delay-topic tiers at this scale |
+| REST + gRPC | Shared `internal/ingest.Service` | One ingestion path, two thin adapters |
+| Metrics labels | No high-cardinality `tenant_id` on ingest | Protect Prometheus |
 
 ---
 
-## Deploy
+## What it doesn’t handle
 
-| Path | Location |
-| ---- | -------- |
-| Terraform (VPC, EKS + IRSA, Aurora, MSK, ElastiCache, S3) | [`terraform/`](terraform/) |
-| Helm chart (api + consumer, probes, preStop, Ingress, scrape annotations) | [`deploy/helm/dispatch/`](deploy/helm/dispatch/) |
-| Observability provisioning | [`deploy/observability/`](deploy/observability/) |
-
-Pods expose `prometheus.io/scrape` annotations on port `9090`. Set `METRICS_ADDR` / `OTEL_*` via Helm `config` values.
-
-Local demos do not require a live AWS apply; Terraform is validated and Helm is deploy-shaped.
-
----
-
-## Non-goals
-
-- OAuth / complex identity — API keys only
-- Tiered Kafka delay topics — one retry topic + `retry_after`
-- Active endpoint health pings — half-open uses real signed events
-- Strict per-subscription ordering when a delivery fails
-- Perfect cloud latency numbers as a success metric — measure on Compose and discuss bottlenecks
-
----
-
-## Status
-
-Phases **0–4** complete. Milestone gates **M0–M4** closed. See [`docs/halfway_summary.md`](docs/halfway_summary.md) and [`docs/roadmap.md`](docs/roadmap.md).
+| Non-goal | Rationale |
+| -------- | --------- |
+| OAuth / complex auth | API keys only — by design |
+| Tiered retry topics | Single retry topic + `retry_after` is enough |
+| Active endpoint health pings | Half-open uses real signed events only |
+| DLQ as a Kafka topic | Replay UX needs Postgres |
+| Strict per-subscription ordering under failure | Failed events don’t block later ones |
+| Perfect cloud absolute latency numbers | Measure on Compose; discuss bottlenecks |
 
 ---
 
@@ -284,11 +165,11 @@ Phases **0–4** complete. Milestone gates **M0–M4** closed. See [`docs/halfwa
 
 | Doc | Contents |
 | --- | -------- |
-| [`docs/architecture.md`](docs/architecture.md) | Package map, pipelines, CB, DLQ, stores |
-| [`docs/project_overview.md`](docs/project_overview.md) | Design rationale and phased build plan |
+| [`docs/summary.md`](docs/summary.md) | Full project snapshot |
+| [`docs/architecture.md`](docs/architecture.md) | Pipelines, packages, CB/DLQ/HMAC |
+| [`docs/project_overview.md`](docs/project_overview.md) | Design rationale |
 | [`docs/roadmap.md`](docs/roadmap.md) | Gates and calendar |
 | [`docs/task_list.md`](docs/task_list.md) | Atomic checkboxes |
-| [`docs/halfway_summary.md`](docs/halfway_summary.md) | What’s shipped vs remaining |
 
 ## License
 

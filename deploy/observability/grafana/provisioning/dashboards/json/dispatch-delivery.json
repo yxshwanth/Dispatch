@@ -1,0 +1,139 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "sum(rate(dispatch_delivery_total{status=\"success\"}[$__rate_interval])) / clamp_min(sum(rate(dispatch_delivery_total{status=~\"success|failure|timeout\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "success rate",
+          "refId": "A"
+        }
+      ],
+      "title": "Delivery success rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(dispatch_delivery_duration_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(dispatch_delivery_duration_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(dispatch_delivery_duration_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Delivery latency p50 / p95 / p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "sum(rate(dispatch_events_ingested_total[$__rate_interval])) * 60",
+          "legendFormat": "events/min",
+          "refId": "A"
+        }
+      ],
+      "title": "Events ingested per minute",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "dispatch_consumer_lag",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Consumer lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "dispatch_retry_queue_depth",
+          "legendFormat": "retry depth",
+          "refId": "A"
+        }
+      ],
+      "title": "Retry queue depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "dispatch_circuit_breaker_state",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Circuit breaker state distribution",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "dispatch-prometheus" },
+          "expr": "sum(rate(dispatch_dead_letters_total[$__rate_interval]))",
+          "legendFormat": "dlq/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Dead letter rate",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dispatch"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "title": "Dispatch Delivery",
+  "uid": "dispatch-delivery",
+  "version": 2
+}

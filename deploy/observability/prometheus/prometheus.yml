@@ -1,5 +1,5 @@
 global:
-  scrape_interval: 15s
+  scrape_interval: 5s
 
 scrape_configs:
   - job_name: dispatch-api
@@ -7,4 +7,5 @@ scrape_configs:
       - targets: ["api:9090"]
   - job_name: dispatch-consumer
     static_configs:
+      # Container listens on :9090; host maps that to :9091.
       - targets: ["consumer:9090"]

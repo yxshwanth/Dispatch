@@ -805,5 +805,5 @@ Project is **done** when all of the following are true:
 
 ## Optional stretch (post-M4)
 
-- [ ] **OPT.1** Internal gRPC ingestion service  
+- [x] **OPT.1** Internal gRPC ingestion service  
   **Done when:** Documented as optional; does not block DoD

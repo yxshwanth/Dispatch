@@ -15,8 +15,8 @@ observability. The stack is Go services, Kafka, Postgres, Redis, and
 optional AWS (EKS / MSK / Aurora / ElastiCache) via Terraform and Helm,
 plus Grafana / OpenTelemetry for the observability path.
 
-Throughput and latency targets are filled from the Week 4 load test and
-published in the README once measured.
+Measured Compose benchmarks (ingest vs delivery, dated) live in the root
+[`README.md`](../README.md) and [`summary.md`](summary.md).
 
 ---
 
