@@ -1,0 +1,70 @@
+namespace: dispatch
+
+image:
+  repository: dispatch
+  tag: latest
+  pullPolicy: IfNotPresent
+
+api:
+  replicaCount: 2
+  serviceAccount:
+    create: true
+    name: dispatch-api
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/dispatch-api
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+    hosts:
+      - host: dispatch.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+consumer:
+  replicaCount: 2
+  serviceAccount:
+    create: true
+    name: dispatch-consumer
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/dispatch-consumer
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 25
+
+config:
+  API_ADDR: ":8080"
+  KAFKA_INGEST_TOPIC: dispatch.ingest
+  KAFKA_RETRY_TOPIC: dispatch.retry
+  KAFKA_INGEST_GROUP: dispatch-ingest
+  KAFKA_RETRY_GROUP: dispatch-retry
+  CONSUMER_MODE: all
+  CB_FAILURE_THRESHOLD: "5"
+  CB_COOLDOWN: 60s
+  RATE_LIMIT_PER_MINUTE: "60"
+
+secrets:
+  # Set via --set or sealed secrets in real deploys
+  DATABASE_URL: ""
+  REDIS_ADDR: ""
+  KAFKA_BROKERS: ""

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Start dependencies
+        run: |
+          docker compose up -d --wait postgres redis redpanda
+          docker compose run --rm migrate up
+          docker compose exec -T redpanda rpk topic create dispatch.ingest -p 3 -r 1 || true
+          docker compose exec -T redpanda rpk topic create dispatch.retry -p 1 -r 1 || true
+
+      - name: Test
+        env:
+          DISPATCH_INTEGRATION: "1"
+          DATABASE_URL: postgres://dispatch:dispatch@localhost:5432/dispatch?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          KAFKA_BROKERS: localhost:19092
+        run: go test ./... -race -count=1 -timeout 180s
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
