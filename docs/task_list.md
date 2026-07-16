@@ -299,11 +299,11 @@ has **Done when**; **Watch** and **Artifacts** where useful.
 - [x] **P1.8.e** Integration: failure path → degraded  
   **Done when:**
   - Test proves N consecutive failures trigger degraded
-  **Watch:** Failure-path tests > happy-path volume for interview value
+  **Watch:** Prefer failure-path coverage over happy-path volume alone
 
-- [x] **P1.8.f** Name testify in docs/resume materials  
+- [x] **P1.8.f** Document testify as the test assertion library  
   **Done when:**
-  - Dependency and README/stub mention testify explicitly
+  - Dependency and README mention testify explicitly
 
 ---
 
@@ -558,167 +558,167 @@ has **Done when**; **Watch** and **Artifacts** where useful.
 
 ### P4.1 — Prometheus metrics
 
-- [ ] **P4.1.a** Instrument with `prometheus/client_golang`  
+- [x] **P4.1.a** Instrument with `prometheus/client_golang`  
   **Done when:**
   - Dependency added; registry wired
 
-- [ ] **P4.1.b** `dispatch_delivery_duration_seconds` (histogram)  
+- [x] **P4.1.b** `dispatch_delivery_duration_seconds` (histogram)  
   **Done when:**
   - Labeled appropriately (status); buckets match realistic latency (10ms…10s)
 
-- [ ] **P4.1.c** `dispatch_delivery_total` (counter)  
+- [x] **P4.1.c** `dispatch_delivery_total` (counter)  
   **Done when:**
   - Labels: success/failure/timeout (or equivalent)
 
-- [ ] **P4.1.d** `dispatch_circuit_breaker_state` (gauge)  
+- [x] **P4.1.d** `dispatch_circuit_breaker_state` (gauge)  
   **Done when:**
   - Per subscription: 1=active, 2=degraded, 3=paused
 
-- [ ] **P4.1.e** `dispatch_events_ingested_total` (counter)  
+- [x] **P4.1.e** `dispatch_events_ingested_total` (counter)  
   **Done when:**
   - Per tenant only if cardinality bounded; otherwise safer label strategy
 
-- [ ] **P4.1.f** `dispatch_dead_letters_total` (counter)  
+- [x] **P4.1.f** `dispatch_dead_letters_total` (counter)  
   **Done when:**
   - Incremented on DLQ insert
 
-- [ ] **P4.1.g** `dispatch_consumer_lag` (gauge)  
+- [x] **P4.1.g** `dispatch_consumer_lag` (gauge)  
   **Done when:**
   - From client or high-watermark vs committed offset
 
-- [ ] **P4.1.h** `dispatch_retry_queue_depth` (gauge)  
+- [x] **P4.1.h** `dispatch_retry_queue_depth` (gauge)  
   **Done when:**
   - Pending retry messages exposed
 
-- [ ] **P4.1.i** `/metrics` on port 9090 (separate from API 8080)  
+- [x] **P4.1.i** `/metrics` on port 9090 (separate from API 8080)  
   **Done when:**
   - Metrics server distinct; K8s scrape annotations documented/applied
   **Watch:** Avoid high-cardinality labels (no event_id, no raw URL)
 
 ### P4.2 — Grafana dashboard
 
-- [ ] **P4.2.a** Add Prometheus + Grafana to Compose with provisioning  
+- [x] **P4.2.a** Add Prometheus + Grafana to Compose with provisioning  
   **Done when:**
   - `make up` brings obs stack; scrape targets use service names (`api:9090`)
   **Artifacts:** provisioning configs under e.g. `deploy/observability/`
 
-- [ ] **P4.2.b** Dashboard-as-code JSON committed  
+- [x] **P4.2.b** Dashboard-as-code JSON committed  
   **Done when:**
   - Exported JSON in repo (prefer build in UI then export)
   **Watch:** Don’t hand-write huge JSON from scratch
 
-- [ ] **P4.2.c** Panel: delivery success rate  
+- [x] **P4.2.c** Panel: delivery success rate  
   **Done when:** Present on dashboard
 
-- [ ] **P4.2.d** Panel: delivery latency p50/p95/p99  
+- [x] **P4.2.d** Panel: delivery latency p50/p95/p99  
   **Done when:** From histogram
 
-- [ ] **P4.2.e** Panel: events ingested per minute  
+- [x] **P4.2.e** Panel: events ingested per minute  
   **Done when:** `rate()` of ingest counter
 
-- [ ] **P4.2.f** Panel: consumer lag  
+- [x] **P4.2.f** Panel: consumer lag  
   **Done when:** Near zero steady-state narrative understood
 
-- [ ] **P4.2.g** Panel: retry queue depth  
+- [x] **P4.2.g** Panel: retry queue depth  
   **Done when:** Present; lag here expected under backoff
 
-- [ ] **P4.2.h** Panel: circuit breaker state distribution  
+- [x] **P4.2.h** Panel: circuit breaker state distribution  
   **Done when:** Active vs degraded vs paused counts
 
-- [ ] **P4.2.i** Panel: dead letter rate  
+- [x] **P4.2.i** Panel: dead letter rate  
   **Done when:** Present on dashboard
 
 ### P4.3 — OpenTelemetry distributed tracing
 
-- [ ] **P4.3.a** OTel SDK (`go.opentelemetry.io/otel`) wired  
+- [x] **P4.3.a** OTel SDK (`go.opentelemetry.io/otel`) wired  
   **Done when:**
   - Tracer provider configured; exporter to Jaeger locally
 
-- [ ] **P4.3.b** Spans: ingest, Kafka produce, Kafka consume, delivery attempt  
+- [x] **P4.3.b** Spans: ingest, Kafka produce, Kafka consume, delivery attempt  
   **Done when:**
   - Full lifecycle visible as one trace when headers propagate
 
-- [ ] **P4.3.c** Propagate W3C trace context via Kafka headers  
+- [x] **P4.3.c** Propagate W3C trace context via Kafka headers  
   **Done when:**
   - Inject on produce, extract on consume
   **Watch:** Kafka has no native W3C propagation
 
-- [ ] **P4.3.d** `event_id` as span attribute  
+- [x] **P4.3.d** `event_id` as span attribute  
   **Done when:**
   - Searchable in Jaeger by event_id
 
-- [ ] **P4.3.e** Jaeger in Compose  
+- [x] **P4.3.e** Jaeger in Compose  
   **Done when:**
   - Local tracing backend up with `make up`
 
-- [ ] **P4.3.f** Do not trace health/metrics endpoints  
+- [x] **P4.3.f** Do not trace health/metrics endpoints  
   **Done when:**
   - `/healthz`, `/readyz`, `/metrics` excluded or sampled out
 
 ### P4.4 — Load test and benchmark
 
-- [ ] **P4.4.a** Load script with k6 or vegeta  
+- [x] **P4.4.a** Load script with k6 or vegeta  
   **Done when:**
   - Ramp scenario for ingest throughput
   **Artifacts:** e.g. `scripts/load/` or `loadtest/`
 
-- [ ] **P4.4.b** Measure p50/p95/p99 delivery latency under load  
+- [x] **P4.4.b** Measure p50/p95/p99 delivery latency under load  
   **Done when:**
   - Numbers captured from metrics or test output
 
-- [ ] **P4.4.c** Completeness check: events ≈ delivery_attempts + dead_letters  
+- [x] **P4.4.c** Completeness check: events ≈ delivery_attempts + dead_letters  
   **Done when:**
   - Post-test SQL/script asserts no silent loss
   **Watch:** Any discrepancy is a bug
 
-- [ ] **P4.4.d** Watch consumer lag during test  
+- [x] **P4.4.d** Watch consumer lag during test  
   **Done when:**
   - Notes whether lag grows unboundedly; partition/consumer scaling called out if needed
 
-- [ ] **P4.4.e** Publish “X K events/sec at sub-Y ms p99” in README  
+- [x] **P4.4.e** Publish “X K events/sec at sub-Y ms p99” in README  
   **Done when:**
-  - Resume placeholders filled from Compose run (not cloud absolutes)
+  - Throughput / p99 latency filled from Compose run (not cloud absolutes)
 
 ### P4.5 — HMAC replay protection and security hardening
 
-- [ ] **P4.5.a** Document 5-minute replay window for consumers  
+- [x] **P4.5.a** Document 5-minute replay window for consumers  
   **Done when:**
   - Consumer-facing docs say reject signatures older than 5 minutes
 
-- [ ] **P4.5.b** Test: 6-minute-old timestamp signature rejected  
+- [x] **P4.5.b** Test: 6-minute-old timestamp signature rejected  
   **Done when:**
   - Explicit test case fails verification / receiver rejection path as designed
 
-- [ ] **P4.5.c** Test: payload size limit enforced  
+- [x] **P4.5.c** Test: payload size limit enforced  
   **Done when:**
   - Oversize body → 4xx
 
-- [ ] **P4.5.d** Test: Content-Type enforcement  
+- [x] **P4.5.d** Test: Content-Type enforcement  
   **Done when:**
   - Non-JSON → 4xx
 
 ### P4.6 — README and documentation
 
-- [ ] **P4.6.a** What the system does  
+- [x] **P4.6.a** What the system does  
   **Done when:** Clear product statement at top of README
 
-- [ ] **P4.6.b** Architecture diagram + how it works  
+- [x] **P4.6.b** Architecture diagram + how it works  
   **Done when:** Diagram (from overview) and short pipeline explanation
 
-- [ ] **P4.6.c** Design decisions and why  
+- [x] **P4.6.c** Design decisions and why  
   **Done when:** Ordering tradeoff, CB half-open, DLQ in Postgres, HMAC model
 
-- [ ] **P4.6.d** What it doesn’t handle (honest limitations)  
+- [x] **P4.6.d** What it doesn’t handle (honest limitations)  
   **Done when:** Matches roadmap non-goals
 
-- [ ] **P4.6.e** How to run locally  
+- [x] **P4.6.e** How to run locally  
   **Done when:** `make up`, migrate, run api/consumer, hit example curl flows
 
-- [ ] **P4.6.f** Benchmark numbers  
+- [x] **P4.6.f** Benchmark numbers  
   **Done when:** X/Y from P4.4 present
 
-- [ ] **P4.6.g** Replace stub README with full portfolio README  
-  **Done when:** Primary artifact ready for GitHub visitors
+- [x] **P4.6.g** Replace stub README with full project README  
+  **Done when:** README is the primary entry point for the repo
   **Artifacts:** `README.md`
 
 ---
@@ -734,7 +734,7 @@ has **Done when**; **Watch** and **Artifacts** where useful.
 - [x] **CX.3** Unit + integration + E2E coverage maintained as features land  
   **Done when:** CI green with `-race` on every push (from P2.5 onward)
 
-- [ ] **CX.4** Atomic commits with descriptive messages  
+- [x] **CX.4** Atomic commits with descriptive messages  
   **Done when:** History reads as feature narrative (e.g. “add circuit breaker state machine with testify tests”)
 
 - [x] **CX.5** Interfaces only when needed  
@@ -787,43 +787,23 @@ Use as a burn-down of HTTP surface (duplicates Phase tasks; check when endpoint 
 
 ---
 
-## Appendix C — Resume keyword burn-down
-
-| Gap | Task IDs |
-| --- | -------- |
-| Kafka / event-driven | P2.1–P2.3, P2.2.e–f |
-| AWS (EKS, RDS, MSK, S3, IAM) | P3.2–P3.5, P3.2.b–c |
-| Terraform | P3.1–P3.5 |
-| Helm | P3.6 |
-| Grafana dashboards | P4.2 |
-| Database migrations | P1.1.e, P1.2 |
-| Testing frameworks (testify) | P1.8 |
-| gRPC (optional stretch) | *(not required for M4)* |
-| Rate limiting / backoff | P1.7, P2.3 |
-| Circuit breaker / resilience | P1.6 |
-| Observability / OpenTelemetry | P4.1–P4.3 |
-| Structured logging | P1.3.c, CX.1 |
-
----
-
-## Appendix D — Definition of Done (project)
+## Appendix C — Definition of Done (project)
 
 Project is **done** when all of the following are true:
 
-- [ ] **DoD.1** Local Compose demo: tenant → subscription → events → deliveries (Kafka path)
-- [ ] **DoD.2** CI green: compose, migrate, `go test ./... -race -count=1`
-- [ ] **DoD.3** `terraform plan` clean for VPC/EKS/Aurora/MSK/ElastiCache/S3/IAM
-- [ ] **DoD.4** Helm values documented; probes, preStop, IRSA, grace period correct
-- [ ] **DoD.5** Prometheus + Grafana + Jaeger work via `make up`
-- [ ] **DoD.6** Load test run; completeness check passes; X/Y in README
-- [ ] **DoD.7** Security tests (replay window, size, Content-Type) green
-- [ ] **DoD.8** README honest: architecture, decisions, non-goals, local run, benchmarks
-- [ ] **DoD.9** Roadmap coarse gates M0–M4 checked
-- [ ] **DoD.10** Resume keyword table (Appendix C) satisfiable from the repo without stretching claims
+- [x] **DoD.1** Local Compose demo: tenant → subscription → events → deliveries (Kafka path)
+- [x] **DoD.2** CI green: compose, migrate, `go test ./... -race -count=1`
+- [x] **DoD.3** `terraform plan` clean for VPC/EKS/Aurora/MSK/ElastiCache/S3/IAM
+- [x] **DoD.4** Helm values documented; probes, preStop, IRSA, grace period correct
+- [x] **DoD.5** Prometheus + Grafana + Jaeger work via `make up`
+- [x] **DoD.6** Load test run; completeness check passes; throughput/p99 in README
+- [x] **DoD.7** Security tests (replay window, size, Content-Type) green
+- [x] **DoD.8** README honest: architecture, decisions, non-goals, local run, benchmarks
+- [x] **DoD.9** Roadmap coarse gates M0–M4 checked
 
 ---
 
 ## Optional stretch (post-M4)
 
-- [ ] **OPT.1** Internal gRPC ingestion service (resume gap only)  
+- [ ] **OPT.1** Internal gRPC ingestion service  
   **Done when:** Documented as optional; does not block DoD

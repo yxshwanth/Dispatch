@@ -371,8 +371,9 @@ Rotation API (`POST .../rotate-secret`):
 3. New `secret` generated (`auth.NewHMACSecret`, 32 bytes hex)
 
 **Receiver guidance (documented intent):** reject signatures whose timestamp
-is older than ~5 minutes (replay protection). Enforced on the consumer side
-of the webhook, not inside Dispatch’s deliverer.
+is older than **5 minutes** (or more than 5 minutes ahead — clock skew bound).
+Helper: `hmacsign.VerifyFresh` / `hmacsign.DefaultReplayWindow`. Enforced on
+the webhook consumer side, not inside Dispatch’s deliverer.
 
 ---
 
@@ -585,6 +586,8 @@ is optional for demos.
 
 ## 18. What this doc is not
 
-- Phase 4 observability (Prometheus / Grafana / OTel) — not wired yet
+- Phase 4 observability is shipped: Prometheus `:9090`, Grafana dashboard under
+  `deploy/observability/`, OTel → Jaeger (OTLP HTTP), vegeta load script under
+  `scripts/load/`
 - Live MSK IAM client signer wiring in Go — Terraform ready; local uses plaintext Redpanda
 - Product auth beyond API keys — intentional non-goal

@@ -49,3 +49,19 @@ func VerifyWithRotation(
 func TimestampHeader(t time.Time) string {
 	return strconv.FormatInt(t.Unix(), 10)
 }
+
+// DefaultReplayWindow is the recommended max age for accepting signed payloads.
+const DefaultReplayWindow = 5 * time.Minute
+
+// VerifyFresh verifies the signature and rejects timestamps older than maxAge
+// (or newer than a small clock-skew allowance of maxAge into the future).
+func VerifyFresh(secret string, timestamp time.Time, payload []byte, signature string, now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		maxAge = DefaultReplayWindow
+	}
+	age := now.Sub(timestamp)
+	if age > maxAge || age < -maxAge {
+		return false
+	}
+	return Verify(secret, timestamp, payload, signature)
+}

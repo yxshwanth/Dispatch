@@ -25,16 +25,21 @@ type Config struct {
 
 	IdempotencyTTL time.Duration
 
-	KafkaBrokers       []string
-	IngestTopic        string
-	RetryTopic         string
+	KafkaBrokers        []string
+	IngestTopic         string
+	RetryTopic          string
 	IngestConsumerGroup string
 	RetryConsumerGroup  string
-	ConsumerMode       string // all | ingest | retry
+	ConsumerMode        string // all | ingest | retry
 
-	RetryBackoff       []time.Duration
-	RecoveryInterval   time.Duration
-	RecoveryAge        time.Duration
+	RetryBackoff     []time.Duration
+	RecoveryInterval time.Duration
+	RecoveryAge      time.Duration
+
+	MetricsAddr   string
+	OTELEndpoint  string
+	OTELService   string
+	TracingEnabled bool
 }
 
 func Load() Config {
@@ -66,6 +71,11 @@ func Load() Config {
 		RetryBackoff:     parseBackoff(getenv("RETRY_BACKOFF", "10s,30s,1m,5m,15m")),
 		RecoveryInterval: getenvDuration("RECOVERY_INTERVAL", 30*time.Second),
 		RecoveryAge:      getenvDuration("RECOVERY_AGE", 60*time.Second),
+
+		MetricsAddr:    getenv("METRICS_ADDR", ":9090"),
+		OTELEndpoint:   getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318"),
+		OTELService:    getenv("OTEL_SERVICE_NAME", "dispatch"),
+		TracingEnabled: getenv("OTEL_TRACING_ENABLED", "true") == "true",
 	}
 }
 

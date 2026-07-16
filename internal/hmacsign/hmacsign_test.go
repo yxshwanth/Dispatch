@@ -48,3 +48,27 @@ func TestVerifyWithRotation(t *testing.T) {
 	sigCur := hmacsign.Sign(current, ts, payload)
 	assert.True(t, hmacsign.VerifyWithRotation(current, &previous, &expires, ts, payload, sigCur, now))
 }
+
+func TestVerifyFreshRejectsStaleTimestamp(t *testing.T) {
+	secret := "test-secret"
+	payload := []byte(`{"hello":"world"}`)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	freshTS := now.Add(-2 * time.Minute)
+	staleTS := now.Add(-6 * time.Minute)
+
+	freshSig := hmacsign.Sign(secret, freshTS, payload)
+	staleSig := hmacsign.Sign(secret, staleTS, payload)
+
+	assert.True(t, hmacsign.VerifyFresh(secret, freshTS, payload, freshSig, now, hmacsign.DefaultReplayWindow))
+	assert.False(t, hmacsign.VerifyFresh(secret, staleTS, payload, staleSig, now, hmacsign.DefaultReplayWindow))
+}
+
+func TestVerifyFreshRejectsFutureTimestamp(t *testing.T) {
+	secret := "test-secret"
+	payload := []byte(`{}`)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	future := now.Add(6 * time.Minute)
+	sig := hmacsign.Sign(secret, future, payload)
+
+	assert.False(t, hmacsign.VerifyFresh(secret, future, payload, sig, now, hmacsign.DefaultReplayWindow))
+}

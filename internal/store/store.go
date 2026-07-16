@@ -641,7 +641,35 @@ func (s *Store) InsertDeadLetter(ctx context.Context, eventID, subID uuid.UUID, 
 		}
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CountSubscriptionsByState returns counts keyed by state (active/degraded/paused).
+func (s *Store) CountSubscriptionsByState(ctx context.Context) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT state, COUNT(*)::int FROM subscriptions GROUP BY state
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{
+		circuitbreaker.StateActive:   0,
+		circuitbreaker.StateDegraded: 0,
+		circuitbreaker.StatePaused:   0,
+	}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListDeadLetters(ctx context.Context, tenantID, subscriptionID uuid.UUID, cursor *time.Time, limit int) ([]DeadLetter, error) {

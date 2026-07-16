@@ -18,9 +18,11 @@ import (
 	"github.com/yash/dispatch/internal/httpapi"
 	"github.com/yash/dispatch/internal/idempotency"
 	"github.com/yash/dispatch/internal/kafka"
+	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/ratelimit"
 	"github.com/yash/dispatch/internal/recovery"
 	"github.com/yash/dispatch/internal/store"
+	"github.com/yash/dispatch/internal/tracing"
 )
 
 func main() {
@@ -29,6 +31,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTrace, err := tracing.Setup(ctx, cfg.OTELService+"-api", cfg.OTELEndpoint, cfg.TracingEnabled, log)
+	if err != nil {
+		log.Error("tracing setup failed", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTrace(context.Background()) }()
 
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -62,6 +71,9 @@ func main() {
 	}
 	deliv := delivery.New(st, cfg.DeliveryTimeout, cbCfg, log)
 	api := httpapi.New(cfg, st, limiter, idem, deliv, prod, log)
+
+	metrics.ListenAndServe(ctx, cfg.MetricsAddr, log)
+	go metrics.RefreshCircuitBreakerGauges(ctx, st, 15*time.Second, log)
 
 	sweeper := recovery.New(st, prod, cfg.RecoveryInterval, cfg.RecoveryAge, log)
 	go sweeper.Run(ctx)

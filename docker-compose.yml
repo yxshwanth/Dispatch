@@ -65,5 +65,91 @@ services:
       ]
     restart: "no"
 
+  webhook:
+    image: mendhak/http-https-echo:31
+    ports:
+      - "8081:8080"
+
+  api:
+    build: .
+    command: ["/usr/local/bin/api"]
+    environment:
+      DATABASE_URL: postgres://dispatch:dispatch@postgres:5432/dispatch?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: redpanda:9092
+      API_ADDR: ":8080"
+      METRICS_ADDR: ":9090"
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_SERVICE_NAME: dispatch
+      OTEL_TRACING_ENABLED: "true"
+      RATE_LIMIT_PER_MINUTE: "100000"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  consumer:
+    build: .
+    command: ["/usr/local/bin/consumer"]
+    environment:
+      DATABASE_URL: postgres://dispatch:dispatch@postgres:5432/dispatch?sslmode=disable
+      KAFKA_BROKERS: redpanda:9092
+      METRICS_ADDR: ":9090"
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_SERVICE_NAME: dispatch
+      OTEL_TRACING_ENABLED: "true"
+      CONSUMER_MODE: all
+    ports:
+      - "9091:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9092:9090"
+    depends_on:
+      - api
+      - consumer
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
 volumes:
   postgres_data:

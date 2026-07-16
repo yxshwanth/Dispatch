@@ -12,7 +12,11 @@ import (
 	"github.com/yash/dispatch/internal/circuitbreaker"
 	"github.com/yash/dispatch/internal/config"
 	"github.com/yash/dispatch/internal/delivery"
+	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Worker struct {
@@ -22,6 +26,7 @@ type Worker struct {
 	prod   *Producer
 	log    *slog.Logger
 	cb     circuitbreaker.Config
+	tracer trace.Tracer
 }
 
 func NewWorker(cfg config.Config, st *store.Store, deliv *delivery.Deliverer, prod *Producer, log *slog.Logger) *Worker {
@@ -39,6 +44,7 @@ func NewWorker(cfg config.Config, st *store.Store, deliv *delivery.Deliverer, pr
 			Cooldown:          cfg.CBCooldown,
 			DLQPauseThreshold: cfg.CBDLQPauseThreshold,
 		},
+		tracer: otel.Tracer("dispatch/kafka"),
 	}
 }
 
@@ -135,15 +141,25 @@ func (w *Worker) runIngest(ctx context.Context) error {
 }
 
 func (w *Worker) processIngest(ctx context.Context, r *kgo.Record) error {
+	headers := r.Headers
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier{headers: &headers})
+	ctx, span := w.tracer.Start(ctx, "kafka.consume.ingest",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	)
+	defer span.End()
+
 	msg, err := DecodeEvent(r.Value)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
+	span.SetAttributes(attribute.String("event_id", msg.EventID.String()))
 	log := w.log.With("event_id", msg.EventID, "tenant_id", msg.TenantID)
 	log.Info("processing ingest message")
 
 	subs, err := w.store.MatchingSubscriptions(ctx, msg.TenantID, msg.EventType)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	for _, sub := range subs {
@@ -205,10 +221,22 @@ func (w *Worker) runRetry(ctx context.Context) error {
 }
 
 func (w *Worker) processRetry(ctx context.Context, r *kgo.Record) error {
+	headers := r.Headers
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier{headers: &headers})
+	ctx, span := w.tracer.Start(ctx, "kafka.consume.retry",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	)
+	defer span.End()
+
 	msg, err := DecodeRetry(r.Value)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
+	span.SetAttributes(
+		attribute.String("event_id", msg.EventID.String()),
+		attribute.Int("attempt", msg.AttemptNumber),
+	)
 	log := w.log.With("event_id", msg.EventID, "subscription_id", msg.SubscriptionID, "attempt", msg.AttemptNumber)
 
 	now := time.Now().Unix()
@@ -226,6 +254,7 @@ func (w *Worker) processRetry(ctx context.Context, r *kgo.Record) error {
 
 	sub, err := w.store.GetSubscriptionByID(ctx, msg.SubscriptionID)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 
@@ -242,6 +271,7 @@ func (w *Worker) processRetry(ctx context.Context, r *kgo.Record) error {
 		if err := w.store.InsertDeadLetter(ctx, msg.EventID, msg.SubscriptionID, msg.AttemptNumber, errMsg, w.cb); err != nil {
 			return err
 		}
+		metrics.DeadLetters.Inc()
 		log.Info("moved to dead letters", "attempts", msg.AttemptNumber)
 		return nil
 	}
@@ -257,7 +287,11 @@ func (w *Worker) processRetry(ctx context.Context, r *kgo.Record) error {
 func (w *Worker) enqueueRetry(ctx context.Context, ev EventMessage, subID uuid.UUID, attempt int, lastErr string) error {
 	delay, exhausted := NextBackoff(w.cfg.RetryBackoff, attempt)
 	if exhausted {
-		return w.store.InsertDeadLetter(ctx, ev.EventID, subID, attempt-1, lastErr, w.cb)
+		if err := w.store.InsertDeadLetter(ctx, ev.EventID, subID, attempt-1, lastErr, w.cb); err != nil {
+			return err
+		}
+		metrics.DeadLetters.Inc()
+		return nil
 	}
 	return w.prod.ProduceRetry(ctx, RetryMessage{
 		EventID:        ev.EventID,

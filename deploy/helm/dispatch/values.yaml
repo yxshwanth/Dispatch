@@ -52,8 +52,12 @@ consumer:
 preStopSleepSeconds: 5
 terminationGracePeriodSeconds: 25
 
+# Default env injected into both deployments.
+# METRICS_ADDR=:9090 with prometheus.io/* pod annotations for scraping.
+# OTEL_TRACING_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT for Jaeger or collector.
 config:
   API_ADDR: ":8080"
+  METRICS_ADDR: ":9090"
   KAFKA_INGEST_TOPIC: dispatch.ingest
   KAFKA_RETRY_TOPIC: dispatch.retry
   KAFKA_INGEST_GROUP: dispatch-ingest
@@ -62,6 +66,7 @@ config:
   CB_FAILURE_THRESHOLD: "5"
   CB_COOLDOWN: 60s
   RATE_LIMIT_PER_MINUTE: "60"
+  OTEL_TRACING_ENABLED: "true"
 
 secrets:
   # Set via --set or sealed secrets in real deploys

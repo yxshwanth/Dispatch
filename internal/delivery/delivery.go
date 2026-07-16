@@ -3,15 +3,22 @@ package delivery
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/yash/dispatch/internal/circuitbreaker"
 	"github.com/yash/dispatch/internal/hmacsign"
+	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Deliverer struct {
@@ -19,6 +26,7 @@ type Deliverer struct {
 	store  *store.Store
 	cb     circuitbreaker.Config
 	log    *slog.Logger
+	tracer trace.Tracer
 }
 
 func New(st *store.Store, timeout time.Duration, cb circuitbreaker.Config, log *slog.Logger) *Deliverer {
@@ -30,6 +38,7 @@ func New(st *store.Store, timeout time.Duration, cb circuitbreaker.Config, log *
 		store:  st,
 		cb:     cb,
 		log:    log,
+		tracer: otel.Tracer("dispatch/delivery"),
 	}
 }
 
@@ -43,6 +52,14 @@ type Result struct {
 }
 
 func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID uuid.UUID, payload []byte) Result {
+	ctx, span := d.tracer.Start(ctx, "delivery.attempt",
+		trace.WithAttributes(
+			attribute.String("event_id", eventID.String()),
+			attribute.String("subscription_id", sub.ID.String()),
+		),
+	)
+	defer span.End()
+
 	now := time.Now().UTC()
 	allow, halfOpen := circuitbreaker.AllowDelivery(sub.State, sub.StateChangedAt, now, d.cb.Cooldown)
 	if !allow {
@@ -51,6 +68,8 @@ func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID
 			"subscription_id", sub.ID,
 			"state", sub.State,
 		)
+		metrics.ObserveDelivery("skipped", 0)
+		span.SetAttributes(attribute.Bool("skipped", true))
 		return Result{Skipped: true}
 	}
 
@@ -60,6 +79,9 @@ func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.URL, bytes.NewReader(payload))
 	if err != nil {
 		d.recordFailure(ctx, sub, eventID, halfOpen, nil, err.Error(), 0)
+		metrics.ObserveDelivery("failure", 0)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return Result{Err: err, HalfOpen: halfOpen}
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -73,13 +95,21 @@ func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID
 	latencyMs := int(latency.Milliseconds())
 
 	if err != nil {
+		status := "failure"
+		if isTimeout(err) {
+			status = "timeout"
+		}
 		d.recordFailure(ctx, sub, eventID, halfOpen, nil, err.Error(), latencyMs)
+		metrics.ObserveDelivery(status, latency)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return Result{Err: err, Latency: latency, HalfOpen: halfOpen}
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 
 	code := resp.StatusCode
+	span.SetAttributes(attribute.Int("http.status_code", code))
 	if code >= 200 && code < 300 {
 		sc := code
 		_, _ = d.store.InsertDeliveryAttempt(ctx, eventID, sub.ID, &sc, nil, &latencyMs)
@@ -92,12 +122,23 @@ func (d *Deliverer) Deliver(ctx context.Context, sub store.Subscription, eventID
 			"status_code", code,
 			"latency_ms", latencyMs,
 		)
+		metrics.ObserveDelivery("success", latency)
 		return Result{Success: true, StatusCode: code, Latency: latency, HalfOpen: halfOpen}
 	}
 
 	errMsg := http.StatusText(code)
 	d.recordFailure(ctx, sub, eventID, halfOpen, &code, errMsg, latencyMs)
+	metrics.ObserveDelivery("failure", latency)
+	span.SetStatus(codes.Error, errMsg)
 	return Result{StatusCode: code, Latency: latency, HalfOpen: halfOpen}
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func (d *Deliverer) recordFailure(ctx context.Context, sub store.Subscription, eventID uuid.UUID, halfOpen bool, statusCode *int, errMsg string, latencyMs int) {

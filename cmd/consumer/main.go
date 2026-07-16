@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yash/dispatch/internal/circuitbreaker"
 	"github.com/yash/dispatch/internal/config"
 	"github.com/yash/dispatch/internal/delivery"
 	"github.com/yash/dispatch/internal/kafka"
+	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/store"
+	"github.com/yash/dispatch/internal/tracing"
 )
 
 func main() {
@@ -21,6 +24,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTrace, err := tracing.Setup(ctx, cfg.OTELService+"-consumer", cfg.OTELEndpoint, cfg.TracingEnabled, log)
+	if err != nil {
+		log.Error("tracing setup failed", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTrace(context.Background()) }()
 
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -44,6 +54,10 @@ func main() {
 	}
 	deliv := delivery.New(st, cfg.DeliveryTimeout, cbCfg, log)
 	worker := kafka.NewWorker(cfg, st, deliv, prod, log)
+
+	metrics.ListenAndServe(ctx, cfg.MetricsAddr, log)
+	go metrics.RefreshCircuitBreakerGauges(ctx, st, 15*time.Second, log)
+	go kafka.ReportLag(ctx, cfg.KafkaBrokers, cfg.IngestTopic, cfg.RetryTopic, cfg.IngestConsumerGroup, 15*time.Second, log)
 
 	log.Info("consumer starting", "mode", cfg.ConsumerMode, "brokers", cfg.KafkaBrokers)
 	if err := worker.Run(ctx); err != nil {

@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down topics run-api run-consumer test test-integration
+.PHONY: up down migrate-up migrate-down topics run-api run-consumer test test-integration load
 
 # Prefer system Docker Engine socket when Desktop socket is unavailable.
 export DOCKER_HOST ?= unix:///var/run/docker.sock
@@ -7,10 +7,13 @@ DATABASE_URL ?= postgres://dispatch:dispatch@localhost:5432/dispatch?sslmode=dis
 REDIS_ADDR ?= localhost:6379
 KAFKA_BROKERS ?= localhost:19092
 API_ADDR ?= :8080
+METRICS_ADDR ?= :9090
+OTEL_EXPORTER_OTLP_ENDPOINT ?= localhost:4318
 
 up:
-	docker compose up -d --wait postgres redis redpanda
+	docker compose up -d --wait --build postgres redis redpanda webhook jaeger api consumer prometheus grafana
 	$(MAKE) topics
+	docker compose run --rm migrate up
 
 down:
 	docker compose down
@@ -26,13 +29,16 @@ topics:
 	docker compose exec -T redpanda rpk topic create dispatch.retry -p 1 -r 1 || true
 
 run-api:
-	DATABASE_URL="$(DATABASE_URL)" REDIS_ADDR="$(REDIS_ADDR)" KAFKA_BROKERS="$(KAFKA_BROKERS)" API_ADDR="$(API_ADDR)" go run ./cmd/api
+	DATABASE_URL="$(DATABASE_URL)" REDIS_ADDR="$(REDIS_ADDR)" KAFKA_BROKERS="$(KAFKA_BROKERS)" API_ADDR="$(API_ADDR)" METRICS_ADDR="$(METRICS_ADDR)" OTEL_EXPORTER_OTLP_ENDPOINT="$(OTEL_EXPORTER_OTLP_ENDPOINT)" go run ./cmd/api
 
 run-consumer:
-	DATABASE_URL="$(DATABASE_URL)" REDIS_ADDR="$(REDIS_ADDR)" KAFKA_BROKERS="$(KAFKA_BROKERS)" go run ./cmd/consumer
+	DATABASE_URL="$(DATABASE_URL)" REDIS_ADDR="$(REDIS_ADDR)" KAFKA_BROKERS="$(KAFKA_BROKERS)" METRICS_ADDR=":9091" OTEL_EXPORTER_OTLP_ENDPOINT="$(OTEL_EXPORTER_OTLP_ENDPOINT)" go run ./cmd/consumer
 
 test:
 	go test ./... -count=1
 
 test-integration:
 	DISPATCH_INTEGRATION=1 DATABASE_URL="$(DATABASE_URL)" REDIS_ADDR="$(REDIS_ADDR)" KAFKA_BROKERS="$(KAFKA_BROKERS)" go test ./... -count=1 -timeout 180s
+
+load:
+	./scripts/load/vegeta.sh

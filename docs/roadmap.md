@@ -6,34 +6,17 @@ Atomic checkboxes live in [`task_list.md`](task_list.md).
 
 ---
 
-## Vision and resume target
+## Vision
 
 **Dispatch** accepts events from producers and reliably delivers them to
 subscriber endpoints with retries, exponential backoff, ordering guarantees
 (per-tenant best-effort), HMAC signing, circuit breaking, and full
-observability. One coherent system that forces Go services, Kafka, Postgres,
-Redis, AWS (EKS/MSK/Aurora/ElastiCache), Terraform, Helm, and Grafana/OTel
-into a single portfolio artifact.
+observability. The stack is Go services, Kafka, Postgres, Redis, and
+optional AWS (EKS / MSK / Aurora / ElastiCache) via Terraform and Helm,
+plus Grafana / OpenTelemetry for the observability path.
 
-**Resume north-star:**
-
-> Dispatch: Webhook Delivery Platform | Go, Kafka, AWS, Terraform, Helm, Grafana | GitHub
->
-> Built a multi-tenant webhook delivery platform: Kafka consumer groups for
-> event fanout, exponential-backoff retry with dead-letter replay,
-> HMAC-signed payloads, per-tenant rate limiting (Redis), PostgreSQL with
-> schema migrations; sustained X K events/sec at sub-Y ms p99 delivery
-> latency (benchmark).
->
-> Deployed on AWS EKS via Terraform (VPC, MSK, Aurora, ElastiCache, IAM)
-> and Helm; Grafana dashboards over Prometheus metrics for delivery success
-> rates, consumer lag, and queue depth; OpenTelemetry distributed tracing
-> across the pipeline.
-
-Keyword coverage (Kafka, AWS, Terraform, Helm, Grafana, migrations,
-testify, rate limiting, circuit breaker, OTel, slog) is the burn-down
-target tracked in `task_list.md` Appendix C. Fill X/Y from the Week 4
-load test.
+Throughput and latency targets are filled from the Week 4 load test and
+published in the README once measured.
 
 ---
 
@@ -199,7 +182,7 @@ security tests, honest README.
 - Named histograms/counters/gauges from overview
 - Grafana + Prometheus (+ Jaeger) in Compose
 - k6 or vegeta load scenario
-- Full README (primary portfolio artifact after code)
+- Full README (architecture, decisions, non-goals, local run, benchmarks)
 
 **Depends on:** Phase 2 minimum; Phase 3 for cloud deploy story (local obs works without AWS).
 
@@ -218,7 +201,7 @@ Track these as project-level done signals (fine-grained work is in `task_list.md
 - [x] **M1** — Sync delivery E2E (tenant → event → delivery_attempt + CB + rate limit + tests)
 - [x] **M2** — Kafka path: ingest, retry, DLQ replay; CI green with `-race`
 - [x] **M3** — `terraform plan` clean; Helm chart deploys-shaped (probes, preStop, IRSA)
-- [ ] **M4** — Grafana + OTel local stack; benchmark numbers in README; security tests green
+- [x] **M4** — Grafana + OTel local stack; benchmark numbers in README; security tests green
 
 ---
 
@@ -251,7 +234,7 @@ Document these in the README; do not build them in the four-week plan:
 | Hand-rolled VPC/EKS modules | Use `terraform-aws-modules` |
 | Perfect cloud absolute latency numbers | Measure on Compose; discuss bottlenecks |
 
-**Optional stretch (resume gap only):** internal gRPC ingestion service — not required for M4.
+**Optional stretch:** internal gRPC ingestion service — not required for M4.
 
 ---
 

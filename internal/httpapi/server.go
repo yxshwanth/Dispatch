@@ -17,8 +17,12 @@ import (
 	"github.com/yash/dispatch/internal/delivery"
 	"github.com/yash/dispatch/internal/idempotency"
 	kafkapkg "github.com/yash/dispatch/internal/kafka"
+	"github.com/yash/dispatch/internal/metrics"
 	"github.com/yash/dispatch/internal/ratelimit"
 	"github.com/yash/dispatch/internal/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Server struct {
@@ -30,18 +34,31 @@ type Server struct {
 	prod   *kafkapkg.Producer
 	log    *slog.Logger
 	mux    *http.ServeMux
+	tracer trace.Tracer
 }
 
 func New(cfg config.Config, st *store.Store, limit *ratelimit.Limiter, idem *idempotency.Store, deliv *delivery.Deliverer, prod *kafkapkg.Producer, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, store: st, limit: limit, idem: idem, deliv: deliv, prod: prod, log: log, mux: http.NewServeMux()}
+	s := &Server{
+		cfg: cfg, store: st, limit: limit, idem: idem, deliv: deliv, prod: prod, log: log,
+		mux: http.NewServeMux(), tracer: otel.Tracer("dispatch/httpapi"),
+	}
 	s.routes()
 	return s
 }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Do not create traces for health/metrics.
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
+			s.mux.ServeHTTP(w, r)
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -348,6 +365,10 @@ func (s *Server) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "event.ingest")
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	tenant := tenantFromContext(r.Context())
 
 	allow, retryAfter, _ := s.limit.Allow(r.Context(), tenant.ID.String())
@@ -431,6 +452,8 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 
 	log := s.log.With("event_id", ev.ID, "tenant_id", tenant.ID)
 	log.Info("event ingested")
+	span.SetAttributes(attribute.String("event_id", ev.ID.String()))
+	metrics.EventsIngested.Inc()
 
 	if s.prod == nil {
 		writeError(w, http.StatusInternalServerError, "kafka producer not configured")

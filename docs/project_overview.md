@@ -2,25 +2,8 @@
 
 A multi-tenant webhook delivery platform. Accept events from producers,
 reliably deliver them to subscriber endpoints with retries, exponential
-backoff, ordering, and full observability. Every company at scale builds
-or buys this (Stripe, GitHub, Twilio all maintain one internally). This
-project is a single coherent system that naturally demands every piece
-of the target tech stack.
-
-**Resume line:**
-
-> Dispatch: Webhook Delivery Platform | Go, Kafka, AWS, Terraform, Helm, Grafana | GitHub
->
-> Built a multi-tenant webhook delivery platform: Kafka consumer groups
-> for event fanout, exponential-backoff retry with dead-letter replay,
-> HMAC-signed payloads, per-tenant rate limiting (Redis), PostgreSQL with
-> schema migrations; sustained X K events/sec at sub-Y ms p99 delivery
-> latency (benchmark).
->
-> Deployed on AWS EKS via Terraform (VPC, MSK, Aurora, ElastiCache, IAM)
-> and Helm; Grafana dashboards over Prometheus metrics for delivery
-> success rates, consumer lag, and queue depth; OpenTelemetry distributed
-> tracing across the pipeline.
+backoff, ordering guarantees, and observability. Every company at scale
+builds or buys this (Stripe, GitHub, Twilio all maintain one internally).
 
 ---
 
@@ -110,8 +93,7 @@ enters the retry path, subsequent events for that subscription are NOT
 blocked. Blocking lets one dead endpoint stall a tenant's entire event
 stream. Consumers that require strict ordering should use the timestamp
 in the signed payload. This is the same tradeoff Stripe and GitHub make.
-Document this clearly — it's the first thing a senior interviewer will
-probe.
+Document it clearly in the README and operator docs.
 
 **Circuit breaker (half-open, not active pings).** Subscriptions move
 active → degraded after N consecutive failures. In degraded state,
@@ -177,10 +159,9 @@ delivery_attempts, dead_letters.
   idempotency_key IS NOT NULL`. This means tenants that don't send keys
   pay no constraint cost. If you use a regular unique index, NULLs are
   considered distinct in Postgres so it still works, but the partial
-  index is cleaner and more interview-discussable.
+  index is cleaner.
 - The partial index on `dead_letters WHERE replayed_at IS NULL` — this is
-  what makes the replay endpoint fast and is a great talking point for
-  Postgres index design.
+  what makes the replay endpoint fast.
 - Use `BIGINT GENERATED ALWAYS AS IDENTITY` for delivery_attempts and
   state_transitions, not SERIAL. SERIAL is legacy.
 
@@ -198,8 +179,7 @@ within a 15-second timeout, exit cleanly.
   real errors. The `ListenAndServe` goroutine always returns an error on
   shutdown; don't log it as a crash.
 - Setting `ReadHeaderTimeout` and `ReadTimeout` on the http.Server.
-  Without these you're vulnerable to slowloris. It's five lines; leaving
-  it out tells an interviewer you haven't thought about it.
+  Without these you're vulnerable to slowloris.
 
 **1.4 — Tenant and subscription CRUD (Days 2–3)**
 
@@ -228,7 +208,7 @@ itself prevents timing leaks on the raw key).
 - Cursor-based pagination, not OFFSET/LIMIT. OFFSET scans and discards
   rows, so page 1000 is slow. Use `WHERE created_at < $cursor ORDER BY
   created_at DESC LIMIT $page_size` — or the primary key if it's
-  monotonic. This is an interview question you will get asked.
+  monotonic.
 - Returning the API key plaintext exactly once in the creation response
   and never again. The DB stores a hash. If you store the key in the
   clear, that's a security question waiting to happen.
@@ -329,8 +309,6 @@ rely on docker compose being up (the simpler approach; CI will do
 `docker compose up` before running tests).
 
 *Watch out for:*
-- Name testify on the resume. "Tested with testify" is a keyword match
-  that "wrote tests" is not.
 - Use `t.Cleanup` for test data teardown, not defer. Cleanup runs after
   subtests complete; defer runs when the parent function returns, which
   can be too early.
@@ -479,7 +457,7 @@ least-privilege ingress/egress rules.
   on the second later — the refactor is painful.
 - Security group rules should be specific: EKS nodes can reach RDS on
   5432, ElastiCache on 6379, MSK on 9092. Don't use 0.0.0.0/0 for
-  internal traffic. This is the "least-privilege" bullet on the resume.
+  internal traffic.
 - Use `terraform-aws-modules/vpc/aws` to avoid reinventing subnet math.
   Writing your own VPC module is not the skill being demonstrated.
 
@@ -669,13 +647,12 @@ p50/p95/p99 delivery latency under load, verify no data loss (every
 ingested event eventually has a delivery_attempt or a dead_letter row).
 
 Publish the numbers in the README: "sustained X K events/sec at sub-Y ms
-p99 delivery latency under Z concurrent producers." These fill the X and
-Y in your resume bullets.
+p99 delivery latency under Z concurrent producers."
 
 *Watch out for:*
 - Run the benchmark against Docker Compose locally, not against a cloud
-  deployment. The absolute numbers don't matter for a portfolio project
-  — the fact that you measured them and can discuss bottlenecks does.
+  deployment. Absolute cloud numbers vary; measure a reproducible local
+  baseline and discuss bottlenecks.
 - Verify data completeness after the load test: count events ingested vs.
   delivery_attempts + dead_letters. Any discrepancy is a bug.
 - Watch for Kafka consumer lag during the test — it tells you whether
@@ -688,35 +665,13 @@ Verify that the HMAC signature includes a timestamp and document the
 5-minute replay window. Write a test that verifies a signature with a
 6-minute-old timestamp is rejected. Verify payload size limits are
 enforced. Verify Content-Type enforcement. Write these as explicit test
-cases — they're the "security" bullet points on your resume.
+cases.
 
 **4.6 — README and documentation (Day 5)**
 
-The README is the most important artifact after the code. Model it after
-the best open-source project READs: state what the system does, how it
-works architecturally (with the diagram), what design decisions were
-made and why, what it doesn't handle (and why not), how to run it
-locally, and what the benchmark numbers are. Intellectual honesty about
-limitations is what separates this from a tutorial project.
-
----
-
-## Resume keyword coverage
-
-| Gap | Where it's filled |
-| --- | --- |
-| Kafka / event-driven architecture | Phase 2: ingest topic, retry topic, consumer groups, offset management |
-| AWS (EKS, RDS, MSK, S3, IAM) | Phase 3: full Terraform provisioning |
-| Terraform | Phase 3: VPC, EKS, RDS, MSK, ElastiCache, S3, IAM modules |
-| Helm | Phase 3: application packaging with probes, preStop, IRSA |
-| Grafana dashboards | Phase 4: dashboard-as-code with delivery metrics |
-| Database migrations | Phase 1: golang-migrate with up/down scripts |
-| Testing frameworks (named) | Phase 1: testify throughout, integration tests against real containers |
-| gRPC (internal services) | Phase 2: internal ingestion service (if added) |
-| Rate limiting / backoff | Phase 1: Redis rate limiter; Phase 2: exponential backoff retries |
-| Circuit breaker / resilience | Phase 1: half-open circuit breaker state machine |
-| Observability / OpenTelemetry | Phase 4: Prometheus, Grafana, OTel tracing, correlation IDs |
-| Structured logging | Phase 1: slog from day one, correlation IDs throughout |
+Keep the README current with what the system does, how it works
+architecturally (with a diagram), design decisions and why, explicit
+non-goals, how to run locally, and benchmark numbers when available.
 
 ---
 
@@ -743,7 +698,5 @@ interfaces only when you need them for testing or when a second
 implementation appears. A `Repository` interface on day one with one
 implementation is ceremony, not architecture.
 
-**Commit history matters.** Atomic commits with descriptive messages.
-An interviewer skimming the repo will look at the commit log. "add
-circuit breaker state machine with testify tests" is better than "wip"
-or "stuff."
+**Commit history matters.** Prefer atomic commits with descriptive
+messages over "wip" dumps.
