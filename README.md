@@ -111,6 +111,7 @@ That starts the data plane, api, consumer, echo webhook, Prometheus, Grafana, an
 | Prometheus | http://localhost:9092 |
 | Jaeger | http://localhost:16686 |
 | Echo webhook | http://localhost:8081 |
+| Fail webhook (500) | http://localhost:8082 |
 
 Host iterate against Compose: `make run-api` (`:8080` HTTP, `:9000` gRPC, `:9090` metrics) and `make run-consumer` (`:9091` metrics).
 
@@ -132,7 +133,7 @@ curl -sS -X POST http://localhost:8080/v1/events \
 
 The tenant response returns `api_key` once. Use `http://webhook:8080/` when the consumer is in Compose.
 
-Load: `make load` (default 50/s). Or `RATE=100/s DURATION=20s ./scripts/load/vegeta.sh`.
+Load: `make load` (smoke, default 50/s). Proofs: `make load-isolation`, `make load-ceiling`, `make load-crash`. Or `RATE=100/s DURATION=20s ./scripts/load/vegeta.sh`.
 
 ---
 
@@ -276,34 +277,30 @@ dead_letters                          unique  pending (event_id, subscription_id
 
 ## Result
 
-Measured 2026-07-16 on Docker Compose. `RATE=50/s`, `DURATION=15s`, vegeta against the in-compose webhook. Laptop figures. Not a cloud SLO.
+Measured 2026-08-16 on Docker Compose. Laptop figures. Not a cloud SLO. Ingest latency is not delivery latency.
 
-Ingest latency is not delivery latency.
+Built a multi-tenant webhook pipeline (Go, Kafka, Postgres). A failing subscriber is isolated to its own retry path; sibling endpoints on the same tenant kept delivering with no ingest 202 drop. Healthy p99 **4 ms** while the dead URL sat in retry.
 
-**Ingest** — `POST /v1/events` → `202`. 50.1 events/sec. 750 requests. 100% accepted.
-
-| | |
-| ---: | --- |
-| p50 | 1.30 ms |
-| p95 | 1.75 ms |
-| p99 | 2.09 ms |
-| max | 17.1 ms |
-
-**Delivery** — consumer → subscriber. `dispatch_delivery_duration_seconds{status="success"}`. n = 750. Mean 1.62 ms.
+**Isolation** — `make load-isolation`. One tenant, two subscriptions (echo 200 + nginx 500). One event exhausted retry → DLQ in 6s (short backoff). Then 3,000 events at 100/s.
 
 | | |
-| ---: | --- |
-| p50 | ~1.7 ms |
-| p95 | ~2.4 ms |
-| p99 | ~2.5 ms |
+| --- | --- |
+| Ingest | 3,000 requests, **100%** `202`, p99 **4.3 ms**, lag 0 |
+| Healthy sub | 3,001 successful attempts, p50 **2 ms**, p99 **4 ms** (`latency_ms`) |
+| Dead sub | 10 HTTP 500s, then `degraded` (skipped on the hot path), 1 DLQ |
+| Completeness | 0 aged events with zero attempts |
 
-99.7% of successes ≤ 2.5 ms. All ≤ 5 ms. Consumer lag 0 after settle.
+**Completeness / ceiling** — `make load-ceiling`. Lifted ingest until consumer lag grew. 100/s and 200/s held lag 0. At **400/s**, 8,000 requests stayed **100%** `202` (ingest p99 **3.7 ms**) while ingest lag rose to 1,236. After settle, lag 0.
 
-Completeness: no events older than 30s missing attempts for matching subscriptions. [`scripts/load/completeness.sql`](scripts/load/completeness.sql).
+Load-tested ingest on Compose to **400** events/sec at p99 **3.7 ms**; 0 events older than 30s missing a delivery attempt after settle.
 
-An earlier 100/s run accepted 100% at ingest p99 ~2 ms. Re-measure delivery if you need matching histogram n.
+The ceiling tenant ingested 14,000 events across the sweep (100 + 200 + 400/s). [`scripts/load/completeness.sql`](scripts/load/completeness.sql) exits 1 on orphans.
 
-Grafana: http://localhost:3000/d/dispatch-delivery/dispatch-delivery
+**Crash recovery** — `make load-crash`. SIGKILL the consumer 12s into a 400/s run. Ingest probe during the outage still returned `202`. 16,000 requests, **100%** `202`. Lag after kill was 967, then 0. Events with no attempt were re-produced by the API sweeper and delivered. After settle: 16,001 events, 16,001 attempts, **0** orphans.
+
+That is at-least-once plus manual commit: crash mid-message does not drop ingest, and completeness still holds.
+
+`make load` remains the 50/s smoke. Grafana: http://localhost:3000/d/dispatch-delivery/dispatch-delivery
 
 ---
 

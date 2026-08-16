@@ -126,7 +126,10 @@ make run-api         # host iterate against Compose infra
 make run-consumer
 make test
 make test-integration
-make load            # vegeta + completeness SQL
+make load            # vegeta smoke (50/s) + completeness SQL
+make load-isolation  # dead URL vs healthy sibling
+make load-ceiling    # raise rate until lag or 202 drops
+make load-crash      # SIGKILL consumer mid-run
 make down
 ```
 
@@ -138,6 +141,7 @@ make down
 | Grafana | http://localhost:3000 (admin/admin; anonymous viewer on) |
 | Jaeger | http://localhost:16686 |
 | Webhook echo | http://localhost:8081 |
+| Webhook fail (500) | http://localhost:8082 |
 
 Compose webhook URL for in-network consumers: `http://webhook:8080/`.
 
@@ -146,29 +150,22 @@ Compose webhook URL for in-network consumers: `http://webhook:8080/`.
 ## 8. Benchmarks (Compose)
 
 Two different latencies — do not conflate them. Numbers below are from the
-**2026-07-16** Compose run (`RATE=50/s`, ~15s, vegeta → Compose `webhook`),
-with fine delivery histogram buckets.
+**2026-08-16** Compose runs (`make load-isolation`, `load-ceiling`, `load-crash`).
+Laptop figures. Not a cloud SLO.
 
-**Ingest** (vegeta → `POST /v1/events` → `202`):
+**Isolation** — one tenant, echo 200 + nginx 500. 3,000 events at 100/s, **100%**
+`202`. Healthy sibling p50 **2 ms** / p99 **4 ms** (`delivery_attempts.latency_ms`).
+Dead URL: 10× 500, then `degraded`, 1 DLQ. Ingest lag 0. Completeness: 0 orphans.
 
-| Metric | Result |
-| ------ | ------ |
-| Rate | **50.1 events/sec**, **750** requests, **100%** `202` |
-| HTTP latency | p50 **1.30 ms** · p95 **1.75 ms** · p99 **2.09 ms** · max **17.1 ms** |
+**Ceiling** — ingest lag grew at **400/s** (8,000 requests, **100%** `202`, ingest
+p99 **3.7 ms**, lag peaked 1,236 then returned to 0). Sweep tenant: 14,000 events,
+0 aged events with zero attempts after settle.
 
-**Delivery** (consumer → subscriber), `dispatch_delivery_duration_seconds{status="success"}`
-(n=750 after that load):
+**Crash** — SIGKILL consumer 12s into 400/s. Ingest stayed `202` (16,000 requests,
+100%). Lag 967 → 0. Sweeper re-produced events with no attempt. After settle:
+16,001 events, 16,001 attempts, 0 orphans.
 
-| Metric | Result |
-| ------ | ------ |
-| Mean (`_sum/_count`) | **1.62 ms** |
-| p50 / p95 / p99 | **~1.7 / ~2.4 / ~2.5 ms** (bucket-interpolated) |
-| Mass | **99.7%** ≤ **2.5 ms** |
-| Consumer lag | **0** |
-
-Completeness: no silent loss for matched subscriptions after settle
-(`scripts/load/completeness.sql`). Dashboard:
-http://localhost:3000/d/dispatch-delivery/dispatch-delivery
+Dashboard: http://localhost:3000/d/dispatch-delivery/dispatch-delivery
 
 ---
 

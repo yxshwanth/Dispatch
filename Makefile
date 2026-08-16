@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down topics run-api run-consumer test test-integration load
+.PHONY: up down migrate-up migrate-down topics run-api run-consumer test test-integration load load-isolation load-ceiling load-crash
 
 # Prefer system Docker Engine socket when Desktop socket is unavailable.
 export DOCKER_HOST ?= unix:///var/run/docker.sock
@@ -11,7 +11,7 @@ METRICS_ADDR ?= :9090
 OTEL_EXPORTER_OTLP_ENDPOINT ?= localhost:4318
 
 up:
-	docker compose up -d --wait --build postgres redis redpanda webhook jaeger api consumer prometheus grafana
+	docker compose up -d --wait --build postgres redis redpanda webhook webhook-fail jaeger api consumer prometheus grafana
 	$(MAKE) topics
 	docker compose run --rm migrate up
 
@@ -42,3 +42,12 @@ test-integration:
 
 load:
 	./scripts/load/vegeta.sh
+
+load-isolation:
+	./scripts/load/isolation.sh
+
+load-ceiling:
+	./scripts/load/ceiling.sh
+
+load-crash:
+	./scripts/load/crash.sh
